@@ -7,6 +7,8 @@ import threading
 import time
 import traceback
 
+from . import cf as F
+from . import ports as P
 from . import system as S
 from .hid import HIDTemps, place
 from .ioreport import IOReport, residency_summary
@@ -177,6 +179,12 @@ class Sampler:
             battery=S.battery(), disk=disk_r, net=net_r, mem=S.memory(), procs=S.processes(12),
             load=loadavg(), self_cpu=round(self.selfcpu.percent(), 1),
         )
+        try:
+            pci = (F.class_props("AppleSmartBattery", "PortControllerInfo") or [None])[0]
+            adapter = (F.class_props("AppleSmartBattery", "AdapterDetails") or [None])[0]
+            out["ports"] = P.read_ports(pci, adapter)
+        except Exception:
+            self.errors["ports"] = traceback.format_exc(limit=2)
         if self.smc:
             out.update(self._smc_fast())
         hid = self.sensors.get("hid") or []

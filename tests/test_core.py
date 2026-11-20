@@ -140,3 +140,29 @@ class Atlas(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+from chipscope import ports  # noqa: E402
+
+
+class Ports(unittest.TestCase):
+    def test_pdo_fixed_and_pps(self):
+        self.assertEqual(ports.pdo(167874860), dict(kind="fixed", volts=5.0, amps=3.0, watts=15.0))
+        self.assertEqual(ports.pdo(33964372)["watts"], 68.0)
+        self.assertEqual(ports.pdo(-925093276)["kind"], "pps")
+
+    def test_direction_comes_from_pd_controller_not_power_in_flag(self):
+        # Seen on this Mac: a charger on USB-C 2 with the port's "Power In" flag still No.
+        live = [dict(type="USB-C", number=2, connected=True, transports=["CC"], connections=6, power_in=False)]
+        pci = [dict(PortControllerAttachCount=1), dict(PortControllerAttachCount=6, PortControllerMaxPower=90000)]
+        adapter = dict(Description="pd charger", Watts=90, UsbHvcHvcIndex=1,
+                       UsbHvcMenu=[dict(MaxVoltage=5000, MaxCurrent=3000), dict(MaxVoltage=20000, MaxCurrent=4500)])
+        ports.attach_pd(live, pci, adapter)
+        self.assertTrue(live[0]["pd_sink"])
+        self.assertEqual(live[0]["charger"]["chosen"], dict(volts=20.0, amps=4.5, watts=90.0))
+
+    def test_device_without_power_contract_is_not_a_charger(self):
+        live = [dict(type="USB-C", number=1, connected=True, transports=["CC"], connections=3, power_in=False)]
+        ports.attach_pd(live, [dict(PortControllerAttachCount=3, PortControllerMaxPower=0)], {})
+        self.assertFalse(live[0]["pd_sink"])
+        self.assertNotIn("charger", live[0])

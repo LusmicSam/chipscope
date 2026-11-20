@@ -459,8 +459,9 @@ export function macView() {
       // ports
       const ports = board.ports || [];
       const left = ports.filter((x) => x.includes('left')), right = ports.filter((x) => x.includes('right'));
-      left.forEach((name, i) => portBlock(g, 24, 430 + i * 56, name.replace(' (left)', ''), 'left'));
-      right.forEach((name, i) => portBlock(g, 1128, 430 + i * 56, name.replace(' (right)', ''), 'right'));
+      p.portSlots = [];
+      left.forEach((name, i) => p.portSlots.push(portBlock(g, 24, 430 + i * 56, name.replace(' (left)', ''), 'left')));
+      right.forEach((name, i) => p.portSlots.push(portBlock(g, 1128, 430 + i * 56, name.replace(' (right)', ''), 'right')));
       // battery
       p.batt = rectBlock(g, { x: 200, y: 470, w: 780, h: 270, rx: 16, label: 'Battery', value2: true, sel: 'battery',
         tip: (f) => { const b = f.board?.battery || {}; return { value: `${b.percent ?? '—'}%`, label: b.charging ? 'Charging' : b.plugged ? 'Plugged in' : 'On battery',
@@ -536,6 +537,7 @@ export function macView() {
       p.batt.val2.textContent = bt.batt_w !== undefined && bt.batt_w !== null ? `${bt.batt_w >= 0 ? 'into' : 'out of'} battery ${fmtW(Math.abs(bt.batt_w))} · system ${fmtW(bt.sys_load_w)}` : '';
       p.batt.r.setAttribute('fill', '#1d1d1c');  // not a processing load: no heat colour
       for (const c of p.battCells) c.setAttribute('width', Math.max(0, 221 * (bt.percent || 0) / 100));
+      paintPorts(p.portSlots, b.ports || []);
       setFlow(p.pwrIn, (bt.sys_in_w || 0) * 1e9, 100e9);
       // battery flow: down into the battery when charging, up out of it when discharging
       p.pwrBattF.dir = (bt.batt_w || 0) >= 0 ? 1 : -1;
@@ -550,15 +552,77 @@ function avgBusy(f) {
   return v.length ? v.reduce((a, b) => a + b, 0) / v.length : 0;
 }
 
+// Which live port (IOKit "Port-<type>@<n>") sits in which drawn socket. MagSafe, HDMI and SD are
+// unambiguous. The USB-C numbers are mapped per model once confirmed by plugging something in.
+const SOCKET_OF = {
+  MacBookPro18_3: { 'MagSafe 3': 'MagSafe 3@1', HDMI: 'HDMI@1', 'SDXC card': 'SD Card@1', TB: [null, null, null] },
+};
+
 function portBlock(g, x, y, name, side) {
   const r = svg('rect', { x, y, width: 28, height: 40, rx: 5, class: 'blk', fill: '#202124' }, g);
-  svg('text', { x: side === 'left' ? x + 36 : x - 8, y: y + 24, class: 'tiny', 'text-anchor': side === 'left' ? 'start' : 'end' }, g, name);
-  bindTip(r, () => {
-    const f = current();
-    const atc = f ? ['ATC0', 'ATC1', 'ATC2', 'ATC3'].reduce((s, a) => s + agentBw(f, a), 0) : 0;
-    return { label: name, value: name.startsWith('Thunderbolt') ? fmtBps(atc) + ' (all USB-C ports)' : 'no counters',
-      explain: name.startsWith('Thunderbolt') ? EXPLAIN.atc : EXPLAIN.port, src: name.startsWith('Thunderbolt') ? 'IOReport AMC Stats ATC0–3' : 'Apple spec' };
-  });
+  const t = svg('text', { x: side === 'left' ? x + 36 : x - 8, y: y + 24, class: 'tiny', 'text-anchor': side === 'left' ? 'start' : 'end' }, g, name);
+  const slot = { r, t, name, side, live: null };
+  bindTip(r, () => portTip(slot));
+  return slot;
+}
+
+function portLine(pt) {
+  if (!pt || !pt.connected) return 'nothing connected';
+  const who = pt.power === 'into Mac' ? `${pt.device ? pt.device.vendor + ' ' : ''}charger${pt.charger?.rated_w ? ' (' + pt.charger.rated_w + ' W)' : ''}` : pt.device ? `${pt.device.vendor} device` : 'something';
+  const data = pt.usb_data ? (pt.superspeed ? 'USB data (SuperSpeed)' : 'USB data') : 'charge only, no data';
+  const c = pt.charger?.chosen;
+  const pwr = pt.power === 'into Mac' ? `charging the Mac${c ? ` at up to ${c.volts} V × ${c.amps} A` : ''}` : pt.power === 'out to device' ? 'Mac is powering it' : '';
+  return [who, data, pwr].filter(Boolean).join(' · ');
+}
+
+function portTip(slot) {
+  const pt = slot.live;
+  const f = current();
+  const atc = f ? ['ATC0', 'ATC1', 'ATC2', 'ATC3'].reduce((s, a) => s + agentBw(f, a), 0) : 0;
+  if (!pt) {
+    const isTB = slot.name.startsWith('Thunderbolt');
+    return { label: slot.name, value: isTB ? 'USB-C port (number not mapped yet)' : 'no live state',
+      rows: isTB ? [['All USB-C memory traffic', fmtBps(atc)]] : [],
+      explain: isTB ? 'macOS numbers the USB-C ports 1–3; which physical socket each number is gets confirmed by plugging something in. Live state for every port is in the side panel.' : EXPLAIN.port,
+      src: isTB ? 'IOKit AppleHPM port controllers' : 'Apple spec' };
+  }
+  const rows = [['Port', pt.id], ['Status', pt.connected ? 'connected' : 'empty']];
+  if (pt.connected) {
+    rows.push(['Device', pt.device ? `${pt.device.vendor} (product ${pt.device.pid})` : '—'], ['Cable', pt.cable ? `${pt.cable.vendor || ''} ${pt.cable.kind}` : '—'],
+      ['Data', pt.usb_data ? 'USB' : 'none (charge only)'], ['Power', pt.power || '—'], ['Plug', pt.orientation === 2 ? 'flipped' : pt.orientation === 1 ? 'normal' : '—']);
+    if (pt.charger?.chosen) rows.push(['Charger contract', `${pt.charger.chosen.volts} V × ${pt.charger.chosen.amps} A = ${pt.charger.chosen.watts} W`]);
+    if (pt.charger?.menu?.length) rows.push(['Charger offers', pt.charger.menu.map((m) => `${m.volts} V`).join(' / ')]);
+  }
+  rows.push(['Plugged in since boot', pt.connections]);
+  return { value: portLine(pt), label: slot.name, rows, src: 'IOKit AppleHPM port controller + USB-PD (CC) identity' };
+}
+
+function paintPorts(slots, live) {
+  const model = (S.topo.model || '').replace(',', '_');
+  const map = SOCKET_OF[model] || {};
+  let tb = 0;
+  for (const slot of slots) {
+    let id = map[slot.name] || null;
+    if (slot.name.startsWith('Thunderbolt')) id = (map.TB || [])[tb++] || null;
+    slot.live = id ? live.find((x) => x.id === id) || null : null;
+    const on = slot.live && slot.live.connected;
+    slot.r.setAttribute('fill', on ? (slot.live.power === 'out to device' ? '#7a5a00' : slot.live.power === 'into Mac' ? '#0a5a0a' : '#1c3b66') : '#202124');
+    slot.t.textContent = slot.name + (on ? ' · ' + (slot.live.device ? slot.live.device.vendor : 'connected') : '');
+  }
+}
+
+export function portsSide(f, el) {
+  const live = f.board?.ports || [];
+  if (!live.length) return;
+  h('h3', {}, el, 'Ports (live)');
+  const t = h('table', { class: 't' }, el);
+  const tb = h('tbody', {}, t);
+  for (const pt of live) {
+    const tr = h('tr', {}, tb);
+    h('td', { style: 'white-space:nowrap' }, tr, pt.type === 'USB-C' ? `USB-C ${pt.number}` : pt.type);
+    h('td', { style: pt.connected ? 'color:#f0efec' : 'color:#898781' }, tr, portLine(pt));
+  }
+  h('div', { class: 'src' }, el, 'Port state from the AppleHPM port controllers; device/cable identity from USB Power Delivery; charger contract from the battery controller.');
 }
 
 function macSide(f, el) {
@@ -578,6 +642,7 @@ function macSide(f, el) {
   const m = b.mem || {};
   kv(el, [['Used by apps', fmtBytes(m.app)], ['Wired (kernel)', fmtBytes(m.wired)], ['Compressed', fmtBytes(m.compressed)], ['Swap used', fmtBytes(m.swap_used)],
     ['Pressure', ({ 1: 'normal', 2: 'warning', 4: 'critical' })[m.pressure_level] || '—']]);
+  portsSide(f, el);
   if (T.wifi?.card) {
     h('h3', {}, el, 'Radios');
     kv(el, [['Wi-Fi chip', T.wifi.card], ['Link', T.wifi.phy ? `${T.wifi.phy} · ch ${T.wifi.channel}` : '—']]);

@@ -185,3 +185,33 @@ def class_props(class_name: str, key: str | None = None) -> list:
         finally:
             IOObjectRelease(s)
     return out
+
+
+_GetChildIterator = _fn(iokit, "IORegistryEntryGetChildIterator", C.c_int, [C.c_uint32, C.c_char_p, C.POINTER(C.c_uint32)])
+_GetClass = _fn(iokit, "IOObjectGetClass", C.c_int, [C.c_uint32, C.c_char_p])
+
+
+def class_name(entry: int) -> str:
+    buf = C.create_string_buffer(128)
+    _GetClass(entry, buf)
+    return buf.value.decode()
+
+
+def children(service: int, depth: int = 2) -> list:
+    """[(class, props, depth)] for the IOService children of an entry, depth-first."""
+    out = []
+    it = C.c_uint32()
+    if _GetChildIterator(service, b"IOService", C.byref(it)) != 0:
+        return out
+    while True:
+        c = IOIteratorNext(it.value)
+        if not c:
+            break
+        try:
+            out.append((class_name(c), registry_props(c), 1))
+            if depth > 1:
+                out.extend((k, p, d + 1) for k, p, d in children(c, depth - 1))
+        finally:
+            IOObjectRelease(c)
+    IOObjectRelease(it.value)
+    return out
