@@ -75,9 +75,9 @@ do {
     check(near(h.first?.rise, 10, 0.01) && (h.first?.arrival ?? 99) < 1, "heat rise + arrival for the near sensor")
 }
 do {
-    let ps = BoardReader.parsePS("  42     1  15.0  2048 13:05:58 shivam /x/.venv/bin/python\n   7     1   0.0   100 02-09:21:39 root /sbin/launchd\n")
+    let ps = BoardReader.parsePS("  42     1  15.0  2048 13:05:58 alice /x/.venv/bin/python\n   7     1   0.0   100 02-09:21:39 root /sbin/launchd\n")
     check(ps.count == 2 && ps[0].age == 13 * 3600 + 5 * 60 + 58 && ps[1].age == 2 * 86400 + 9 * 3600 + 21 * 60 + 39, "ps rows + elapsed time")
-    let f = Optimizer.analyze(ps, vm: VMInfo(), me: "shivam", selfPID: 999)
+    let f = Optimizer.analyze(ps, vm: VMInfo(), me: "alice", selfPID: 999)
     check(f.first?.id == "orphans", "orphaned .venv python is flagged")
 }
 do {
