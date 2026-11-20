@@ -1,0 +1,47 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>chipscope</title>
+  <link rel="stylesheet" href="/style.css">
+</head>
+<body>
+<div id="app">
+  <header>
+    <div class="brand">chipscope<small id="machine">…</small></div>
+    <div id="crumbs"></div>
+    <nav class="tabs" id="tabs">
+      <a href="#/mac" data-tab="map">Map</a>
+      <a href="#/atlas" data-tab="atlas">Signal timing</a>
+      <a href="#/sensors" data-tab="sensors">Sensors</a>
+    </nav>
+    <label class="ctl">Heat by
+      <select id="heatBy">
+        <option value="busy">Busy %</option>
+        <option value="work">Busy × clock</option>
+        <option value="power">Power</option>
+      </select>
+    </label>
+    <button class="toggle" id="explain" title="Explain what each block is and where its number comes from">Explain</button>
+    <span id="conn">connecting…</span>
+  </header>
+  <main>
+    <div id="stage"></div>
+    <aside id="side"></aside>
+  </main>
+  <footer>
+    <div class="loads" id="loads"></div>
+    <div class="timeline">
+      <button class="livebtn on" id="live" title="Follow live data">● Live</button>
+      <canvas id="tl" title="Last minutes of SoC power. Click or drag to replay."></canvas>
+      <span class="when" id="when"></span>
+    </div>
+    <div class="heatlegend"><span>idle</span><span class="bar" id="heatbar"></span><span>max</span></div>
+  </footer>
+</div>
+<div id="tip"></div>
+<div id="err"></div>
+<script type="module" src="/app.js"></script>
+</body>
+</html>
