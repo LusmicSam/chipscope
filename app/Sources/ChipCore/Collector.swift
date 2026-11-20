@@ -38,6 +38,9 @@ public final class Collector {
     public let topo: Topology
     public var onFrame: ((Frame) -> Void)?
     public var onSweep: ((SensorSweep) -> Void)?
+    /// Set while a page that shows every sensor is open; otherwise the full SMC sweep runs every 60 s.
+    public var wantFullSweep = false
+    private var sweeps = 0
 
     private let ior = IOReportReader()
     private let smc = SMCReader()
@@ -117,7 +120,7 @@ public final class Collector {
         }
         prevNet = net; prevNetT = now
         b.vm = BoardReader.vm()
-        b.procs = tick % 3 == 1 || old.procs.isEmpty ? BoardReader.processes() : old.procs
+        b.procs = tick % 10 == 1 || old.procs.isEmpty ? BoardReader.processes() : old.procs
         b.load = BoardReader.loadavg()
         b.selfCPU = selfCPU.percent()
         b.ports = tick % 2 == 1 || old.ports.isEmpty ? PortReader.read() : old.ports
@@ -135,8 +138,10 @@ public final class Collector {
 
     private func sweep() {
         var s = SensorSweep()
+        sweeps += 1
+        let full = wantFullSweep || sweeps % 4 == 1   // every 60 s unless a sensor page is open
         sensorLock.lock()
-        let keys = smcSensorKeys
+        let keys = full ? smcSensorKeys : []
         for k in keys {
             guard let v = smc.read(k) else { continue }
             s.smc.append(.init(id: k, key: k, category: smcCategory(k, v.value, v.type), value: v.value, type: v.type, us: v.us, label: COMMUNITY_TEMPS[k]))
@@ -147,6 +152,7 @@ public final class Collector {
         lat["smc"] = s.smc.map(\.us)
         for h in s.hid { lat[h.place == "battery" ? "hid_battery" : h.place == "ssd" ? "hid_ssd" : "hid_pmu", default: []].append(h.us) }
         s.latency = lat.filter { !$0.value.isEmpty }.mapValues { (median($0)!, $0.count) }
+        if !full { s.smc = []; s.latency["smc"] = nil }   // the hub keeps the previous full sweep
         let soc = s.hid.filter { $0.place == "soc" }.map(\.c)
         boardLock.lock()
         board.socMax = soc.max(); board.socAvg = soc.isEmpty ? nil : soc.reduce(0, +) / Double(soc.count)

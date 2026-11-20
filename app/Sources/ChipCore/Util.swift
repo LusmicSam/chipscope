@@ -44,6 +44,17 @@ public enum IOReg {
             IOObjectRelease(s)
         }
     }
+    /// Only the named properties of the first service of a class (much cheaper than every property).
+    public static func firstProps(_ cls: String, keys: [String]) -> [String: Any] {
+        var out: [String: Any] = [:]
+        var done = false
+        each(cls) { s in
+            guard !done else { return }
+            done = true
+            for k in keys { if let v = prop(s, k) { out[k] = v } }
+        }
+        return out
+    }
     public static func firstProps(_ cls: String) -> [String: Any] {
         var out: [String: Any] = [:]
         each(cls) { s in if out.isEmpty { out = props(s) } }
@@ -54,7 +65,8 @@ public enum IOReg {
         IOObjectGetClass(e, &buf)
         return String(cString: buf)
     }
-    public static func children(_ e: io_registry_entry_t, plane: String = "IOService", depth: Int = 2) -> [(cls: String, props: [String: Any])] {
+    /// Children with only the named properties read (`keys` nil = all properties).
+    public static func children(_ e: io_registry_entry_t, plane: String = "IOService", depth: Int = 2, keys: [String]? = nil) -> [(cls: String, props: [String: Any])] {
         var out: [(String, [String: Any])] = []
         var it: io_iterator_t = 0
         guard IORegistryEntryGetChildIterator(e, plane, &it) == KERN_SUCCESS else { return out }
@@ -62,8 +74,12 @@ public enum IOReg {
         while true {
             let c = IOIteratorNext(it)
             if c == 0 { break }
-            out.append((className(c), props(c)))
-            if depth > 1 { out.append(contentsOf: children(c, plane: plane, depth: depth - 1)) }
+            if let keys {
+                var p: [String: Any] = [:]
+                for k in keys { if let v = prop(c, k) { p[k] = v } }
+                out.append((className(c), p))
+            } else { out.append((className(c), props(c))) }
+            if depth > 1 { out.append(contentsOf: children(c, plane: plane, depth: depth - 1, keys: keys)) }
             IOObjectRelease(c)
         }
         return out

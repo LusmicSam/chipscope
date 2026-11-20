@@ -16,6 +16,29 @@ if CommandLine.arguments.count >= 3, CommandLine.arguments[1] == "--collect", le
     exit(0)
 }
 
+// `ChipCheck --bench`: CPU time per call of each reader (user + system).
+if CommandLine.arguments.count >= 2, CommandLine.arguments[1] == "--bench" {
+    let topo = TopologyReader.read()
+    let ior = IOReportReader(), smc = SMCReader(), hid = HIDTempReader()
+    func cpuNow() -> Double { var r = rusage(); getrusage(RUSAGE_SELF, &r); return Double(r.ru_utime.tv_sec + r.ru_stime.tv_sec) + Double(r.ru_utime.tv_usec + r.ru_stime.tv_usec) / 1e6 }
+    func bench(_ name: String, _ n: Int, perSec: Double, _ fn: () -> Void) {
+        let a = cpuNow(); for _ in 0..<n { fn() }; let ms = (cpuNow() - a) / Double(n) * 1000
+        print(name.padding(toLength: 28, withPad: " ", startingAt: 0) + String(format: " %7.2f ms/call  × %.2f/s = %5.2f%% of a core", ms, perSec, ms * perSec / 10))
+    }
+    _ = ior.sample(); Thread.sleep(forTimeInterval: 0.25)
+    bench("IOReport sample + frame", 40, perSec: 4) { _ = buildChipFrame(topo, ior.sample(), gpu: BoardReader.gpuStats()) }
+    bench("  of which GPU stats", 40, perSec: 4) { _ = BoardReader.gpuStats() }
+    bench("battery", 20, perSec: 1) { _ = BoardReader.battery() }
+    bench("ports (+ PD info)", 20, perSec: 0.5) { _ = PortReader.read() }
+    bench("vm + swap", 20, perSec: 1) { _ = BoardReader.vm() }
+    bench("net", 20, perSec: 1) { _ = BoardReader.netCounters() }
+    bench("disk", 20, perSec: 1) { _ = BoardReader.diskCounters() }
+    bench("ps (process list)", 5, perSec: 0.2) { _ = BoardReader.processes() }
+    bench("SMC fans + 14 die keys", 10, perSec: 1) { for k in ["FNum", "F0Ac", "F0Mn", "F0Mx", "F1Ac", "F1Mn", "F1Mx"] + Array(COMMUNITY_TEMPS.keys) { _ = smc.read(k) } }
+    bench("HID temps (64)", 5, perSec: 1.0 / 15) { _ = hid.read() }
+    exit(0)
+}
+
 var failures = 0
 func check(_ ok: Bool, _ what: String) { print((ok ? "PASS " : "FAIL ") + what); if !ok { failures += 1 } }
 func near(_ a: Double?, _ b: Double, _ tol: Double = 1e-6) -> Bool { a.map { abs($0 - b) <= tol } ?? false }

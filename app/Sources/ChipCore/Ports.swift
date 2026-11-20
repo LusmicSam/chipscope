@@ -53,8 +53,12 @@ public enum PortReader {
         var out: [MacPort] = []
         for cls in classes {
             IOReg.each(cls) { s in
-                let p = IOReg.props(s)
-                let kids = IOReg.children(s, depth: 2)
+                var p: [String: Any] = [:]
+                for k in ["PortTypeDescription", "PortNumber", "ConnectionActive", "TransportsActive", "PlugOrientation", "ConnectionCount",
+                          "IOAccessoryUSBActive", "IOAccessoryUSBSuperSpeedActive"] { if let v = IOReg.prop(s, k) { p[k] = v } }
+                let connected = (p["ConnectionActive"] as? Bool) ?? false
+                // Child nodes (identity, cable) only matter when something is plugged in.
+                let kids = connected ? IOReg.children(s, depth: 2, keys: ["Vendor ID (SOP)", "Product ID (SOP)", "Product Type Description", "Vendor ID"]) : []
                 let type = (p["PortTypeDescription"] as? String) ?? cls
                 let num = (p["PortNumber"] as? NSNumber)?.intValue ?? 0
                 var port = MacPort(id: "\(type)@\(num)", type: type, number: num)

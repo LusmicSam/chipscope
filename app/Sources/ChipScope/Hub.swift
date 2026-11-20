@@ -40,7 +40,12 @@ import Observation
 
     func start() {
         collector.onFrame = { [weak self] f in self?.push(f) }
-        collector.onSweep = { [weak self] s in self?.sweep = s }
+        collector.onSweep = { [weak self] s in
+            guard let self else { return }
+            var s = s
+            if s.smc.isEmpty { s.smc = sweep.smc; s.latency["smc"] = sweep.latency["smc"] }   // partial sweep: keep SMC rows
+            sweep = s
+        }
         collector.start()
         DispatchQueue.global(qos: .utility).async {
             let w = TopologyReader.wifi()
@@ -57,7 +62,8 @@ import Observation
         if f.id % 4 == 0 {
             summary = (f.chip.cores.values.map(\.busy).reduce(0, +) / Double(max(1, f.chip.cores.count)), f.chip.socW)
         }
-        guard f.id % 2 == 0, windowVisible() else { return }
+        // Redraw 2×/s while chipscope is the active app, 1×/s when visible behind it, never when covered.
+        guard f.id % (NSApp.isActive || alwaysDraw ? 2 : 4) == 0, windowVisible() else { return }
         latest = f
         tick += 1
         loadStatus = loads.status()

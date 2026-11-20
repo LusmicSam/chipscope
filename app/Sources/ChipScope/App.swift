@@ -60,7 +60,10 @@ enum HeatBy: String, CaseIterable, Identifiable {
     var cursor: Int?            // replay index into hub.frames (nil = live)
     var thermalSource: LoadKind = .pCores
     var sensorFilter = ""
-    func go(_ r: Route) { route = r; selection = nil }
+    func go(_ r: Route) {
+        route = r; selection = nil
+        switch r { case .sensors, .thermal: Hub.shared.collector.wantFullSweep = true; default: Hub.shared.collector.wantFullSweep = false }
+    }
 }
 
 /// Hover card shared by every view: the hovered item's live content and where the pointer is.

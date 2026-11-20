@@ -27,7 +27,8 @@ public struct Proc: Identifiable { public var pid: Int; public var ppid: Int; pu
 public enum BoardReader {
     public static func battery() -> Battery {
         var b = Battery()
-        let p = IOReg.firstProps("AppleSmartBattery")
+        let p = IOReg.firstProps("AppleSmartBattery", keys: ["CurrentCapacity", "IsCharging", "ExternalConnected", "Voltage", "Amperage", "Temperature",
+                                                             "CycleCount", "AppleRawMaxCapacity", "DesignCapacity", "PowerTelemetryData", "AdapterDetails"])
         guard !p.isEmpty else { return b }
         b.percent = (p["CurrentCapacity"] as? NSNumber)?.intValue
         b.charging = (p["IsCharging"] as? Bool) ?? false
@@ -47,7 +48,7 @@ public enum BoardReader {
     }
 
     public static func batteryPD() -> (pci: [[String: Any]], adapter: [String: Any]) {
-        let p = IOReg.firstProps("AppleSmartBattery")
+        let p = IOReg.firstProps("AppleSmartBattery", keys: ["PortControllerInfo", "AdapterDetails"])
         return ((p["PortControllerInfo"] as? [[String: Any]]) ?? [], (p["AdapterDetails"] as? [String: Any]) ?? [:])
     }
 

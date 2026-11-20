@@ -1,6 +1,6 @@
 # chipscope
 
-A native macOS app that shows a live, clickable map of an Apple Silicon Mac, from the whole machine down to a single CPU core. Built and tested on an M1 Pro MacBook Pro 14" (MacBookPro18,3). No sudo, no browser, no Python: SwiftUI plus a small C layer and one native probe helper. It costs about 4% of one CPU core while it is on screen and almost nothing when hidden.
+A native macOS app that shows a live, clickable map of an Apple Silicon Mac, from the whole machine down to a single CPU core. Built and tested on an M1 Pro MacBook Pro 14" (MacBookPro18,3). No sudo, no browser, no Python: SwiftUI plus a small C layer and one native probe helper. Measured at 6–8% of one CPU core while it is the active app on screen (it redraws twice a second). It redraws once a second when another app is in front and stops drawing while its window is covered; data collection continues, so replay stays complete.
 
 ```bash
 ./app/run.sh          # build, install to ~/Applications/chipscope.app, launch
