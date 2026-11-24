@@ -1,3 +1,4 @@
+import CoreGraphics
 import Foundation
 
 // ------------------------------------------------------------------ IOReport channel binding
@@ -91,15 +92,20 @@ public func chipSpec(_ brand: String, gpuCores: Int) -> Spec {
 }
 
 // ------------------------------------------------------------------ layout preview (dev only)
-/// `CHIPSCOPE_PREVIEW_CHIP="Apple M4 Max|6,6|4|40"`: brand | P-cluster sizes | E-cluster sizes | GPU cores.
+/// `CHIPSCOPE_PREVIEW_CHIP="Apple M4 Max|6,6|4|40"`: brand | P-cluster sizes | E-cluster sizes | GPU cores,
+/// optionally `|product name|port types` ("MacBook Air (M2, 2022)|USB-C,USB-C,MagSafe 3").
 /// Draws the app for a chip this Mac isn't, to check layouts. Live counters won't match it (all —).
 public func previewTopology(_ s: String) -> Topology? {
     let f = s.split(separator: "|", omittingEmptySubsequences: false).map(String.init)
-    guard f.count == 4, let gpu = Int(f[3]) else { return nil }
+    guard f.count == 4 || f.count == 6, let gpu = Int(f[3]) else { return nil }
     let sizes = { (x: String) in x.split(separator: ",").compactMap { Int($0) } }
     var t = Topology()
     t.chip = f[0]; t.model = "preview"; t.gpuCores = gpu
     t.spec = chipSpec(f[0], gpuCores: gpu)
+    if f.count == 6 {
+        let sides = portSides(f[4], types: f[5].split(separator: ",").map(String.init))
+        t.board = BoardSpec(name: f[4], display: "preview", leftPorts: sides.left, rightPorts: sides.right)
+    }
     var logical = 0
     for (type, list) in [("P", sizes(f[1])), ("E", sizes(f[2]))] {
         for (n, live) in list.enumerated() {
@@ -114,4 +120,61 @@ public func previewTopology(_ s: String) -> Topology? {
         }
     }
     return t
+}
+
+// ------------------------------------------------------------------ the Mac around the chip
+
+/// Board facts for any Apple Silicon Mac, read from the machine: the marketing name from the
+/// device tree (/product product-name, e.g. "MacBook Pro (14-inch, 2021)"), the built-in panel
+/// from CoreGraphics and the ports from the live port controllers. Only the side each port sits on
+/// is a rule (it isn't exposed): see `portSides`.
+public func readBoard(model: String) -> BoardSpec {
+    var b = BoardSpec()
+    let product = IORegistryEntryFromPath(kIOMainPortDefault, "IODeviceTree:/product")
+    if product != 0 {
+        b.name = dataString(IOReg.prop(product, "product-name")) ?? ""
+        IOObjectRelease(product)
+    }
+    if b.name.isEmpty { b.name = model }
+    b.display = builtInDisplay()
+    let sides = portSides(b.name, types: PortReader.read().map(\.type))
+    b.leftPorts = sides.left; b.rightPorts = sides.right
+    return b
+}
+
+/// "3024×1964 · 120 Hz" for the built-in panel, "" when there is none (or the lid is closed). The
+/// size is already in the product name; CGDisplayScreenSize gives 14.1″ where Apple says 14.2″.
+public func builtInDisplay() -> String {
+    var ids = [CGDirectDisplayID](repeating: 0, count: 16)
+    var n: UInt32 = 0
+    guard CGGetOnlineDisplayList(16, &ids, &n) == .success else { return "" }
+    guard let d = ids.prefix(Int(n)).first(where: { CGDisplayIsBuiltin($0) != 0 }) else { return "" }
+    let opts = [kCGDisplayShowDuplicateLowResolutionModes: true] as CFDictionary
+    let modes = (CGDisplayCopyAllDisplayModes(d, opts) as? [CGDisplayMode]) ?? []
+    // The panel's own resolution is the mode flagged native (kDisplayModeNativeFlag); the biggest
+    // mode is a scaled backing size (3600×2338 on a 3024×1964 panel).
+    let native = modes.filter { $0.ioFlags & 0x0200_0000 != 0 }.max { $0.pixelWidth < $1.pixelWidth }
+    let hz = modes.map(\.refreshRate).max() ?? 0
+    var parts: [String] = []
+    if let native { parts.append("\(native.pixelWidth)×\(native.pixelHeight)") }
+    if hz > 0 { parts.append("\(Int(hz.rounded())) Hz") }
+    return parts.joined(separator: " · ")
+}
+
+/// Physical sides, by family (Apple's tech specs): MacBook Air - MagSafe (M2+) and the USB-C ports
+/// on the left, headphone jack on the right. 13-inch MacBook Pro - USB-C left, headphone right.
+/// 14/16-inch MacBook Pro - MagSafe, two USB-C and headphone left; SD, HDMI and any third USB-C
+/// right. Which USB-C *number* is which socket isn't exposed, so USB-C sockets stay unnumbered.
+/// Anything else (desktops, unknown names) returns empty sides and the view lists live ports.
+public func portSides(_ name: String, types: [String]) -> (left: [String], right: [String]) {
+    let usbc = types.filter { $0 == "USB-C" }.count
+    let mag = types.contains("MagSafe 3") ? ["MagSafe 3"] : []
+    let c = { (k: Int) in Array(repeating: "USB-C", count: max(0, k)) }
+    if name.hasPrefix("MacBook Air") { return (mag + c(usbc), ["Headphone jack"]) }
+    if name.hasPrefix("MacBook Pro (13-inch") { return (c(usbc), ["Headphone jack"]) }
+    if name.hasPrefix("MacBook Pro") {
+        return (mag + c(min(2, usbc)) + ["Headphone jack"],
+                (types.contains("SD Card") ? ["SDXC card"] : []) + (types.contains("HDMI") ? ["HDMI"] : []) + c(usbc - 2))
+    }
+    return ([], [])
 }

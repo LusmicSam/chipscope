@@ -157,9 +157,23 @@ do {
     check(!chipSpec("Apple M9", gpuCores: 10).known && chipSpec("Apple M9", gpuCores: 10).memScaleBW > 0, "unknown chip: no spec, still a heat scale")
 }
 
+do {
+    let air1 = portSides("MacBook Air (M1, 2020)", types: ["USB-C", "USB-C"])
+    check(air1.left == ["USB-C", "USB-C"] && air1.right == ["Headphone jack"], "Air M1: two USB-C left, jack right")
+    let air2 = portSides("MacBook Air (15-inch, M3, 2024)", types: ["USB-C", "USB-C", "MagSafe 3"])
+    check(air2.left == ["MagSafe 3", "USB-C", "USB-C"], "Air M2+: MagSafe + USB-C left")
+    check(portSides("MacBook Pro (13-inch, M2, 2022)", types: ["USB-C", "USB-C"]).left == ["USB-C", "USB-C"], "13-inch Pro: USB-C left")
+    let p14 = portSides("MacBook Pro (14-inch, 2021)", types: ["USB-C", "USB-C", "USB-C", "MagSafe 3", "HDMI", "SD Card"])
+    check(p14.left == ["MagSafe 3", "USB-C", "USB-C", "Headphone jack"] && p14.right == ["SDXC card", "HDMI", "USB-C"], "14-inch Pro: same sockets as the old hand-made 18,3 layout")
+    let m3 = portSides("MacBook Pro (14-inch, M3, Nov 2023)", types: ["USB-C", "USB-C", "MagSafe 3", "HDMI", "SD Card"])
+    check(m3.right == ["SDXC card", "HDMI"], "14-inch M3 (two USB-C): no right-side USB-C")
+    check(portSides("Mac mini (2024)", types: ["USB-C"]).left.isEmpty, "desktops: no invented sides")
+}
+
 // ---------------------------------------------------------------- live smoke test
 let topo = TopologyReader.read()
 check(topo.clusters.count >= 2 && !topo.liveCores.isEmpty, "topology: \(topo.chip), \(topo.liveCores.count) cores, \(topo.clusters.flatMap(\.cores).filter(\.fused).count) fused")
+check(!topo.board.name.isEmpty && !topo.board.leftPorts.isEmpty, "board: \(topo.board.name) · \(topo.board.display) · L \(topo.board.leftPorts) R \(topo.board.rightPorts)")
 let reader = IOReportReader()
 Thread.sleep(forTimeInterval: 0.5)
 let f = buildChipFrame(topo, reader.sample(), gpu: BoardReader.gpuStats())

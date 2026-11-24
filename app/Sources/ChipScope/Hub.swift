@@ -54,7 +54,12 @@ import Observation
         }
     }
 
+    /// Layout preview: CHIPSCOPE_PREVIEW_FANS=0 draws a fanless Mac.
+    private let previewFans = ProcessInfo.processInfo.environment["CHIPSCOPE_PREVIEW_FANS"].flatMap { Int($0) }
+
     private func push(_ f: Frame) {
+        var f = f
+        if let n = previewFans { f.board.fans = Array(f.board.fans.prefix(n)) }
         frames.append(f)
         if frames.count > Hub.maxFrames {
             frames.removeFirst(frames.count - Hub.maxFrames)

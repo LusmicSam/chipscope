@@ -184,11 +184,7 @@ public enum TopologyReader {
         }
         let ior = IOReportReader()
         if ior.ok { bindChannels(&t, ior.channels().map { ($0.subgroup.isEmpty ? $0.group : $0.subgroup, $0.name) }) }
-        if t.model == "MacBookPro18,3" {
-            t.board = BoardSpec(name: "MacBook Pro 14\u{2033} (2021)", display: "Liquid Retina XDR 14.2\u{2033} · 3024×1964 · 120 Hz",
-                                leftPorts: ["MagSafe 3", "Thunderbolt 4", "Thunderbolt 4", "Headphone jack"],
-                                rightPorts: ["SDXC card", "HDMI", "Thunderbolt 4"])
-        }
+        t.board = readBoard(model: t.model)
         return t
     }
 

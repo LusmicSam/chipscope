@@ -16,7 +16,7 @@ let package = Package(
             name: "ChipCore",
             dependencies: ["CChip"],
             path: "Sources/ChipCore",
-            linkerSettings: [.linkedFramework("IOKit")]
+            linkerSettings: [.linkedFramework("IOKit"), .linkedFramework("CoreGraphics")]
         ),
         .executableTarget(
             name: "ChipScope",

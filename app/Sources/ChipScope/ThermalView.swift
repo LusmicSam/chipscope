@@ -68,8 +68,8 @@ struct ThermalView: View {
         var p = Path(); p.move(to: CGPoint(x: 600, y: 230)); p.addCurve(to: CGPoint(x: 270, y: 150), control1: CGPoint(x: 500, y: 140), control2: CGPoint(x: 380, y: 150))
         var q = Path(); q.move(to: CGPoint(x: 640, y: 230)); q.addCurve(to: CGPoint(x: 910, y: 110), control1: CGPoint(x: 720, y: 130), control2: CGPoint(x: 820, y: 110))
         let strength = min(1, maxRise / 15) * 40e9
-        return FlowLayer(flows: [Flow(path: p, rd: 0, wr: strength, offset: .zero, color: (Theme.power, Color(hex: 0xFF7B3A))),
-                                 Flow(path: q, rd: 0, wr: strength, offset: .zero, color: (Theme.power, Color(hex: 0xFF7B3A)))])
+        let fans = hub.latest?.board.fans.count ?? 2
+        return FlowLayer(flows: [p, q].prefix(fans).map { Flow(path: $0, rd: 0, wr: strength, offset: .zero, color: (Theme.power, Color(hex: 0xFF7B3A))) })
     }
 
     // ------------------------------------------------------------ sensor families (live)

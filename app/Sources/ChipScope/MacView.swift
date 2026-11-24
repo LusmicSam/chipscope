@@ -110,7 +110,7 @@ struct MacBody: View {
         ZStack(alignment: .topLeading) {
             // display hinge along the top
             RoundedRectangle(cornerRadius: 6).fill(LinearGradient(colors: [Color(hex: 0x2E2F33), Color(hex: 0x1E1F22)], startPoint: .top, endPoint: .bottom))
-                .overlay(Text("Display · \(topo.board.display)").font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.ink2).padding(.leading, 14), alignment: .leading)
+                .overlay(Text(topo.board.display.isEmpty ? "Display" : "Display · \(topo.board.display)").font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.ink2).padding(.leading, 14), alignment: .leading)
                 .overlay(heatColor(lin(f.chip.agentBW("DISP"), 10e9)).opacity(0.5).clipShape(RoundedRectangle(cornerRadius: 6)))
                 .frame(width: 1100, height: 30).position(x: 590, y: 60)
             Circle().fill(Color(hex: 0x0A0A0B)).overlay(Circle().stroke(Color(hex: 0x3A3B40))).frame(width: 12, height: 12).position(x: 590, y: 60)
@@ -121,11 +121,17 @@ struct MacBody: View {
                 .frame(width: 1110, height: 700).position(x: 590, y: 430)
             // logic board (PCB) with traces
             LogicBoard().frame(width: 640, height: 300).position(x: 640, y: 270)
-            // heat pipe: SoC -> both fin stacks
-            HeatPipe(temp: soc).frame(width: 1180, height: 820)
-            // fin stacks next to the fans
-            FinStack(temp: soc.map { $0 - 6 }).frame(width: 34, height: 150).position(x: 270, y: 210)
-            FinStack(temp: soc.map { $0 - 6 }).frame(width: 34, height: 150).position(x: 910 + 0, y: 140)
+            // cooling: a heat pipe + fin stack per fan (SMC fan count); fanless Macs get a passive spreader
+            let fans = f.board.fans.count
+            if fans == 0 {
+                RoundedRectangle(cornerRadius: 8).fill(Color(hex: 0x6B6E75).opacity(0.25)).overlay(RoundedRectangle(cornerRadius: 8).stroke(Color(hex: 0x8A8D94).opacity(0.4)))
+                    .overlay(Text("fanless · passive heat spreader").font(.system(size: 10)).foregroundStyle(Theme.muted).padding(6), alignment: .topLeading)
+                    .frame(width: 330, height: 230).position(x: 600, y: 290)
+            } else {
+                HeatPipe(temp: soc, count: fans).frame(width: 1180, height: 820)
+                FinStack(temp: soc.map { $0 - 6 }).frame(width: 34, height: 150).position(x: 270, y: 210)
+                if fans > 1 { FinStack(temp: soc.map { $0 - 6 }).frame(width: 34, height: 150).position(x: 910 + 0, y: 140) }
+            }
             // speakers
             ForEach([80.0, 1100.0], id: \.self) { x in SpeakerGrille().frame(width: 52, height: 130).position(x: x, y: 380) }
         }
@@ -162,13 +168,14 @@ struct LogicBoard: View {
 
 struct HeatPipe: View {
     var temp: Double?
+    var count = 2
     var body: some View {
         Canvas { ctx, _ in
             var p = Path()
             p.move(to: CGPoint(x: 600, y: 230)); p.addCurve(to: CGPoint(x: 270, y: 150), control1: CGPoint(x: 500, y: 140), control2: CGPoint(x: 380, y: 150))
             var q = Path()
             q.move(to: CGPoint(x: 640, y: 230)); q.addCurve(to: CGPoint(x: 910, y: 110), control1: CGPoint(x: 720, y: 130), control2: CGPoint(x: 820, y: 110))
-            for path in [p, q] {
+            for path in [p, q].prefix(count) {
                 ctx.stroke(path, with: .color(Color(hex: 0x5A3A1E)), style: StrokeStyle(lineWidth: 18, lineCap: .round))
                 ctx.stroke(path, with: .linearGradient(Gradient(colors: [Theme.copper, Color(hex: 0xD99A5B), Theme.copper]), startPoint: CGPoint(x: 0, y: 100), endPoint: CGPoint(x: 0, y: 260)),
                            style: StrokeStyle(lineWidth: 12, lineCap: .round))
@@ -277,9 +284,9 @@ struct PortColumn: View {
             }
             .frame(width: 26, height: 44).position(x: x, y: 450 + CGFloat(i) * 62)
             .tip("port.\(name)\(i)") {
-                Tip(value: live.map { $0.connected ? ($0.sink ? "charging the Mac" : "connected") : "empty" } ?? "USB-C (port number not mapped)",
+                Tip(value: live.map { $0.connected ? ($0.sink ? "charging the Mac" : "connected") : "empty" } ?? (name == "Headphone jack" ? "analog audio (no live state)" : name == "USB-C" ? "USB-C (port number not mapped)" : "no live state"),
                     label: name, rows: live.map { p in [("Port", p.id), ("Device", p.vendor ?? "—"), ("Cable", p.cable ?? "—")] } ?? [],
-                    explain: "macOS numbers the USB-C ports 1–3; which socket is which number gets confirmed by plugging something in. Every port's live state is on the Ports & power page.",
+                    explain: "macOS numbers the USB-C ports but doesn't say which socket is which number, so sockets stay unnumbered here. Every port's live state is on the Ports & power page.",
                     source: "IOKit AppleHPM port controllers")
             }
             Text(name + (on ? " · \(live?.vendor ?? "in use")" : "")).font(.system(size: 10.5)).foregroundStyle(on ? Theme.ink : Theme.muted)
