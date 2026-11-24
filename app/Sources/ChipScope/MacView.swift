@@ -30,7 +30,7 @@ struct MacView: View {
                                   rows: [("CPU", Fmt.w(f.chip.cpuW)), ("GPU", Fmt.w(f.chip.gpu.w)), ("Neural Engine", Fmt.w(f.chip.aneW)), ("Die sensors (max)", Fmt.temp(b.socMax))],
                                   source: "IOReport Energy Model · HID PMU sensors") }
         ForEach(0..<2, id: \.self) { i in
-            MemoryPackage(rect: CGRect(x: 705, y: 222 + CGFloat(i) * 82, width: 92, height: 76), heat: lin(f.chip.mem.dram, t.spec.memPeakBW), lines: [Fmt.bps(f.chip.mem.dram / 2)])
+            MemoryPackage(rect: CGRect(x: 705, y: 222 + CGFloat(i) * 82, width: 92, height: 76), heat: f.chip.hasBW ? lin(f.chip.mem.dram, t.spec.memScaleBW) : 0, lines: [f.chip.hasBW ? Fmt.bps(f.chip.mem.dram / 2) : "memory"], kind: memKind(t))
                 .onTapGesture { ui.go(.memory) }
                 .tip("mac.dram") { Tip(value: Fmt.bps(f.chip.mem.dram), label: "Unified memory (\(Fmt.bytes(t.memoryBytes)))", rows: [("DRAM power", Fmt.w(f.chip.mem.dramW))]) }
         }
@@ -63,8 +63,11 @@ struct MacView: View {
                                   ("Temperature", Fmt.temp(bt.tempC)), ("Health", bt.health.map { "\(Fmt.pct($0)) · \(bt.cycles ?? 0) cycles" } ?? "—")],
                            source: "IOKit AppleSmartBattery") }
         // ports, with live state
-        PortColumn(names: hub.topo.board.leftPorts, x: 26, side: .leading, ports: b.ports)
-        PortColumn(names: hub.topo.board.rightPorts, x: 1154, side: .trailing, ports: b.ports)
+        // Known model: the sockets in physical order. Otherwise every port macOS reports, split over both sides.
+        let known = !hub.topo.board.leftPorts.isEmpty || !hub.topo.board.rightPorts.isEmpty
+        let live = b.ports.map(\.id), half = (live.count + 1) / 2
+        PortColumn(names: known ? hub.topo.board.leftPorts : Array(live.prefix(half)), x: 26, side: .leading, ports: b.ports)
+        PortColumn(names: known ? hub.topo.board.rightPorts : Array(live.dropFirst(half)), x: 1154, side: .trailing, ports: b.ports)
         if let p = b.ports.first(where: { $0.sink }) {
             Text("⚡︎ charging through \(p.type == "USB-C" ? "USB-C port \(p.number)" : p.type) · \(p.charger?.chosen.map { "\(Int($0.volts)) V × \($0.amps) A" } ?? "") · \(Fmt.w(b.battery.sysInW)) in")
                 .font(.system(size: 12, weight: .medium)).foregroundStyle(Theme.power).position(x: 590, y: 790)
@@ -289,7 +292,7 @@ struct PortColumn: View {
         case "MagSafe 3": return ports.first { $0.type == "MagSafe 3" }
         case "HDMI": return ports.first { $0.type == "HDMI" }
         case "SDXC card": return ports.first { $0.type == "SD Card" }
-        default: return nil   // USB-C sockets: number ↔ position not confirmed yet
+        default: return ports.first { $0.id == name }   // live port ids on unknown models; USB-C sockets on known ones stay unmapped
         }
     }
 }

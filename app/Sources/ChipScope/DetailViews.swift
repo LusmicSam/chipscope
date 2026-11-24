@@ -30,7 +30,7 @@ struct ClusterView: View {
     var body: some View {
         if let c = hub.topo.cluster(id), let f = hub.current(ui) {
             Page(title: c.label, lead: EXPLAIN[c.type == "P" ? "pclu" : "eclu"]) {
-                HStack(spacing: 14) {
+                LazyVGrid(columns: Array(repeating: GridItem(.fixed(220), spacing: 14), count: min(4, c.cores.count)), alignment: .leading, spacing: 14) {
                     ForEach(c.cores) { k in
                         if k.fused {
                             GhostBlock(rect: CGRect(x: 0, y: 0, width: 220, height: 230), lines: ["slot \(k.slot): fused off", "disabled at the factory"]).frame(width: 220, height: 230)
@@ -40,11 +40,11 @@ struct ClusterView: View {
                     }
                 }
                 let l2 = f.chip.bw[c.amc] ?? BW()
-                SiliconBlock(rect: CGRect(x: 0, y: 0, width: CGFloat(c.cores.count) * 234 - 14, height: 60), title: "L2 cache · \(Fmt.bytes(c.l2)) shared",
+                SiliconBlock(rect: CGRect(x: 0, y: 0, width: CGFloat(min(4, c.cores.count)) * 234 - 14, height: 60), title: "L2 cache · \(Fmt.bytes(c.l2)) shared",
                              lines: ["\(Fmt.bps(l2.total)) to the fabric (read \(Fmt.bps(l2.rd)), write \(Fmt.bps(l2.wr)))"], heat: lin(l2.total, 100e9))
-                    .frame(width: CGFloat(c.cores.count) * 234 - 14, height: 60)
+                    .frame(width: CGFloat(min(4, c.cores.count)) * 234 - 14, height: 60)
                 if let dt = c.l2DeviceTree, dt != c.l2 {
-                    Text("L2 size: sysctl says \(Fmt.bytes(c.l2)), the device tree says \(Fmt.bytes(dt)); sysctl matches public M1 Pro analysis.").font(.system(size: 11)).foregroundStyle(Theme.muted)
+                    Text("L2 size: sysctl says \(Fmt.bytes(c.l2)), the device tree says \(Fmt.bytes(dt)); sysctl is what chipscope uses.").font(.system(size: 11)).foregroundStyle(Theme.muted)
                 }
                 LazyVGrid(columns: grid2, spacing: 14) {
                     ForEach(c.cores.filter { !$0.fused }) { k in
@@ -238,7 +238,7 @@ struct MemoryView: View {
                                   ("Pages swapped in / out since boot", "\(big(m.swapins)) / \(big(m.swapouts))")])
                     }
                     Card(title: "Who moves data through the memory system", note: "Each agent's traffic at the memory controller. Darker share reached DRAM; the rest hit the 24 MB system cache.") { agentBars(f) }
-                    Card(title: "DRAM traffic, last 60 s", note: "Peak \(Fmt.bps(t.spec.memPeakBW)) (Apple spec).") {
+                    Card(title: "DRAM traffic, last 60 s", note: t.spec.memPeakBW > 0 ? "Peak \(Fmt.bps(t.spec.memPeakBW)) (Apple spec)." : (f.chip.hasBW ? "" : "Not exposed on this chip.")) {
                         HistoryChart(series: [Series(name: "Read", color: Theme.read, values: hub.window(HIST, ui).map { $0.chip.mem.dramRd }),
                                               Series(name: "Write", color: Theme.write, values: hub.window(HIST, ui).map { $0.chip.mem.dramWr })], format: { Fmt.bps($0) })
                         HStack(spacing: 14) { LegendLine(color: Theme.read, label: "Read"); LegendLine(color: Theme.write, label: "Write") }

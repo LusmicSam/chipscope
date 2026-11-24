@@ -1,6 +1,6 @@
 # chipscope
 
-A native macOS app that shows a live, clickable map of an Apple Silicon Mac, from the whole machine down to a single CPU core. Built and tested on an M1 Pro MacBook Pro 14" (MacBookPro18,3). No sudo, no browser, no Python: SwiftUI plus a small C layer and one native probe helper. Measured at 6–8% of one CPU core while it is the active app on screen (it redraws twice a second). It redraws once a second when another app is in front and stops drawing while its window is covered; data collection continues, so replay stays complete.
+A native macOS app that shows a live, clickable map of an Apple Silicon Mac, from the whole machine down to a single CPU core. Built on an M1 Pro MacBook Pro 14" (MacBookPro18,3); reads its CPU layout, counter names and clock tables from the machine, so other Apple Silicon Macs (M1–M4, Pro/Max/Ultra) draw their own chip. Only the M1 Pro is tested on real hardware. No sudo, no browser, no Python: SwiftUI plus a small C layer and one native probe helper. Measured at 6–8% of one CPU core while it is the active app on screen (it redraws twice a second). It redraws once a second when another app is in front and stops drawing while its window is covered; data collection continues, so replay stays complete.
 
 ```bash
 ./app/run.sh          # build, install to ~/Applications/chipscope.app, launch
@@ -12,7 +12,7 @@ The first version was a browser UI with a Python collector (`chipscope/`, `web/`
 
 ## What you see
 
-- **Map**: Mac → M1 Pro → CPU cluster → core, plus GPU and unified memory views.
+- **Map**: Mac → chip → CPU cluster → core, plus GPU and unified memory views.
   - Blocks go from slate to red with real load: busy %, busy × clock, or power.
   - Memory traffic is animated along the real path, agent → fabric → system cache → memory controllers → DRAM. Read and write are separate lanes.
   - Fused-off cores (2 P-cores, 2 GPU cores on this chip) are shown hatched.
@@ -46,6 +46,8 @@ Facts macOS does not expose come from Apple's published specs: SLC size, memory 
 ```bash
 cd app && swift build -c release --product ChipCheck && .build/release/ChipCheck   # unit checks + live smoke test
 .build/release/ChipCheck --collect 20                                               # collector CPU cost
+.build/release/ChipCheck --dump                                                     # what chipscope reads on this Mac (attach to bug reports)
+CHIPSCOPE_PREVIEW_CHIP="Apple M4 Max|6,6|4|40" ~/Applications/chipscope.app/Contents/MacOS/ChipScope   # draw another chip's layout (no live data)
 CHIPSCOPE_SNAPSHOT_DIR=/tmp/shots ~/Applications/chipscope.app/Contents/MacOS/ChipScope   # PNG of every page
 ```
 

@@ -9,6 +9,9 @@ public struct CoreSlot: Identifiable, Hashable {
     public var ioreport: String?
     public var energy: String?
     public var fused: Bool
+    public init(id: String, slot: Int, logical: Int?, cpuID: Int?, ioreport: String?, energy: String?, fused: Bool) {
+        self.id = id; self.slot = slot; self.logical = logical; self.cpuID = cpuID; self.ioreport = ioreport; self.energy = energy; self.fused = fused
+    }
 }
 
 public struct Cluster: Identifiable, Hashable {
@@ -23,12 +26,22 @@ public struct Cluster: Identifiable, Hashable {
     public var l2: Int
     public var l2DeviceTree: Int?
     public var cores: [CoreSlot]
+    public init(id: String, label: String, short: String, type: String, ioreport: String, energy: String, amc: String,
+                freqs: [Int], l2: Int, l2DeviceTree: Int?, cores: [CoreSlot]) {
+        self.id = id; self.label = label; self.short = short; self.type = type; self.ioreport = ioreport; self.energy = energy
+        self.amc = amc; self.freqs = freqs; self.l2 = l2; self.l2DeviceTree = l2DeviceTree; self.cores = cores
+    }
 }
 
 public struct Spec {
     public var gpuDieCores = 0, aneCores = 0, slcBytes = 0, memBusBits = 0, memPackages = 0
     public var memType = "", transistors = "", process = ""
-    public var memPeakBW = 200e9
+    public var memPeakBW = 0.0
+    /// Core slots per cluster on the die (incl. fused-off ones), when known from die analysis; else 0.
+    public var pSlots = 0, eSlots = 0
+    public var known: Bool { !process.isEmpty }
+    /// Scale for memory heat: Apple's peak, or a generous default when the chip is unknown.
+    public var memScaleBW: Double { memPeakBW > 0 ? memPeakBW : 200e9 }
 }
 
 public struct BoardSpec {
@@ -66,17 +79,33 @@ public struct Topology {
     public var liveCores: [(Cluster, CoreSlot)] { clusters.flatMap { c in c.cores.filter { !$0.fused }.map { (c, $0) } } }
 }
 
+/// pmgr DVFS table -> MHz. Entries are (frequency, voltage) u32 pairs. M1-M3 store Hz, M4+ store kHz
+/// (macmon); the unit is told apart by size, so a future chip with either unit still reads right.
 public func freqTable(_ v: Any?) -> [Int] {
     guard let d = v as? Data else { return [] }
-    var out: [Int] = []
+    var raw: [UInt32] = []
     var i = 0
     while i + 8 <= d.count {
-        var hz: UInt32 = 0
-        for k in 0..<4 { hz |= UInt32(d[d.startIndex + i + k]) << (8 * UInt32(k)) }
-        out.append(Int(hz / 1_000_000))
+        var f: UInt32 = 0
+        for k in 0..<4 { f |= UInt32(d[d.startIndex + i + k]) << (8 * UInt32(k)) }
+        raw.append(f)
         i += 8
     }
-    return out
+    // 10 MHz in Hz = 1e7; 10 GHz in kHz = 1e7. Real tables top out between 0.4 and 4.6 GHz.
+    let div: UInt32 = (raw.max() ?? 0) >= 10_000_000 ? 1_000_000 : 1_000
+    return raw.map { Int($0 / div) }
+}
+
+/// pmgr key of the E and P CPU tables: voltage-states1/5-sram on M1-M4, else from acc-clusters
+/// (8-byte entries: byte 0 = table index, byte 1 = tier; lowest tier = E, highest = P).
+func cpuFreqKeys(_ pmgr: [String: Any]) -> (e: String, p: String) {
+    if pmgr["voltage-states1-sram"] != nil && pmgr["voltage-states5-sram"] != nil { return ("voltage-states1-sram", "voltage-states5-sram") }
+    guard let d = pmgr["acc-clusters"] as? Data, d.count >= 16 else { return ("voltage-states1-sram", "voltage-states5-sram") }
+    var cl: [(tier: UInt8, key: String)] = []
+    var i = 0
+    while i + 8 <= d.count { cl.append((d[d.startIndex + i + 1], "voltage-states\(d[d.startIndex + i])-sram")); i += 8 }
+    cl.sort { $0.tier < $1.tier }
+    return (cl.first!.key, cl.last!.key)
 }
 
 public enum TopologyReader {
@@ -90,11 +119,11 @@ public enum TopologyReader {
             t.caches[k] = Sysctl.int("hw." + k)
         }
         // Frequency tables from the power manager's device-tree node.
-        var pmgr: [String: Any] = [:]
-        let pm = IOServiceGetMatchingService(kIOMainPortDefault, IOServiceNameMatching("pmgr"))
-        if pm != 0 { pmgr = IOReg.props(pm); IOObjectRelease(pm) }
-        let eF = freqTable(pmgr["voltage-states1-sram"]), pF = freqTable(pmgr["voltage-states5-sram"])
+        let pmgr = pmgrProps()
+        let keys = cpuFreqKeys(pmgr)
+        let eF = freqTable(pmgr[keys.e]), pF = freqTable(pmgr[keys.p])
         t.gpuFreqs = freqTable(pmgr["voltage-states9"])
+        t.spec = chipSpec(t.chip, gpuCores: (IOReg.firstProps("IOAccelerator", keys: ["gpu-core-count"])["gpu-core-count"] as? NSNumber)?.intValue ?? 0)
         // CPU cores from the device tree; missing slots are fused-off cores.
         struct Raw { var cpuID: Int; var logical: Int; var type: String; var clusterID: Int; var slot: Int?; var l2: Int? }
         var raws: [Raw] = []
@@ -109,15 +138,24 @@ public enum TopologyReader {
             }
             IOObjectRelease(cpus)
         }
-        var pIndex = 0
+        // Slots per cluster: from die analysis when known, else the widest cluster of that type.
+        func widest(_ type: String) -> Int {
+            Set(raws.filter { ($0.type == "E") == (type == "E") }.map(\.clusterID)).map { cid in
+                let m = raws.filter { $0.clusterID == cid }
+                return (m.compactMap(\.slot).max().map { $0 + 1 }) ?? m.count
+            }.max() ?? 0
+        }
+        let slotsE = max(widest("E"), t.spec.eSlots), slotsP = max(widest("P"), t.spec.pSlots)
+        var pIndex = 0, eIndex = 0
         for cid in Set(raws.map(\.clusterID)).sorted() {
             let members = raws.filter { $0.clusterID == cid }
             let isE = members.first?.type == "E"
-            let id = isE ? "eclu" : "pclu\(pIndex)"
-            let prefix = isE ? "ECPU0" : "PCPU\(pIndex)"
-            let energy = isE ? "EACC" : "PACC\(pIndex)"
-            let present = members.compactMap(\.slot).sorted()
-            let slots = max((present.last.map { $0 + 1 }) ?? members.count, isE ? 2 : 4)
+            let n = isE ? eIndex : pIndex
+            // Names below are the M1 Pro scheme; bindChannels() replaces them with what IOReport really has.
+            let id = isE ? (n == 0 ? "eclu" : "eclu\(n)") : "pclu\(n)"
+            let prefix = isE ? "ECPU\(n)" : "PCPU\(n)"
+            let energy = isE ? (n == 0 ? "EACC" : "EACC\(n)") : "PACC\(n)"
+            let slots = max(members.count, isE ? slotsE : slotsP)
             var cores: [CoreSlot] = []
             for s in 0..<slots {
                 if let m = members.first(where: { $0.slot == s }) {
@@ -127,13 +165,15 @@ public enum TopologyReader {
                     cores.append(CoreSlot(id: "\(id).\(s)", slot: s, logical: nil, cpuID: nil, ioreport: nil, energy: nil, fused: true))
                 }
             }
+            let eLevel = max(0, (Sysctl.int("hw.nperflevels") ?? 2) - 1)
             t.clusters.append(Cluster(
-                id: id, label: isE ? "E-cluster (efficiency)" : "P-cluster \(pIndex) (performance)", short: isE ? "E-cluster" : "P-cluster \(pIndex)",
-                type: isE ? "E" : "P", ioreport: isE ? "ECPU" : (pIndex == 0 ? "PCPU" : "PCPU\(pIndex)"), energy: energy,
-                amc: isE ? "ECPU" : "PCPU\(pIndex)", freqs: isE ? eF : pF,
-                l2: Sysctl.int(isE ? "hw.perflevel1.l2cachesize" : "hw.perflevel0.l2cachesize") ?? 0,
+                id: id, label: isE ? "E-cluster\(n > 0 ? " \(n)" : "") (efficiency)" : "P-cluster \(n) (performance)",
+                short: isE ? "E-cluster\(n > 0 ? " \(n)" : "")" : "P-cluster \(n)",
+                type: isE ? "E" : "P", ioreport: isE ? (n == 0 ? "ECPU" : "ECPU\(n)") : (n == 0 ? "PCPU" : "PCPU\(n)"), energy: energy,
+                amc: isE ? (n == 0 ? "ECPU" : "ECPU\(n)") : "PCPU\(n)", freqs: isE ? eF : pF,
+                l2: Sysctl.int(isE ? "hw.perflevel\(eLevel).l2cachesize" : "hw.perflevel0.l2cachesize") ?? 0,
                 l2DeviceTree: members.first?.l2, cores: cores))
-            if !isE { pIndex += 1 }
+            if isE { eIndex += 1 } else { pIndex += 1 }
         }
         // P-clusters first, then E (drawing order).
         t.clusters.sort { ($0.type == "P" ? 0 : 1, $0.id) < ($1.type == "P" ? 0 : 1, $1.id) }
@@ -142,10 +182,8 @@ public enum TopologyReader {
         IOReg.each("IONVMeController") { s in
             if t.ssdModel.isEmpty, let m = IOReg.prop(s, "Model Number") as? String { t.ssdModel = m.trimmingCharacters(in: .whitespaces) }
         }
-        if t.chip.contains("M1 Pro") {
-            t.spec = Spec(gpuDieCores: 16, aneCores: 16, slcBytes: 24 << 20, memBusBits: 256, memPackages: 2,
-                          memType: "LPDDR5-6400", transistors: "33.7 billion", process: "TSMC 5 nm", memPeakBW: 200e9)
-        }
+        let ior = IOReportReader()
+        if ior.ok { bindChannels(&t, ior.channels().map { ($0.subgroup.isEmpty ? $0.group : $0.subgroup, $0.name) }) }
         if t.model == "MacBookPro18,3" {
             t.board = BoardSpec(name: "MacBook Pro 14\u{2033} (2021)", display: "Liquid Retina XDR 14.2\u{2033} · 3024×1964 · 120 Hz",
                                 leftPorts: ["MagSafe 3", "Thunderbolt 4", "Thunderbolt 4", "Headphone jack"],

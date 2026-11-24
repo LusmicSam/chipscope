@@ -34,7 +34,8 @@ import Observation
     var heat = HeatRun()
 
     private init() {
-        topo = TopologyReader.read()
+        topo = ProcessInfo.processInfo.environment["CHIPSCOPE_PREVIEW_CHIP"].flatMap(previewTopology) ?? TopologyReader.read()
+        EXPLAIN = makeExplain(topo)
         collector = Collector(topo: topo)
     }
 

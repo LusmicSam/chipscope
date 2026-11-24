@@ -51,7 +51,8 @@ public struct RawSample {
 }
 
 public final class IOReportReader {
-    private let buf = UnsafeMutablePointer<cc_item>.allocate(capacity: 640)
+    private static let cap = 4096   // M1 Pro has ~260 channels; big chips have many more
+    private let buf = UnsafeMutablePointer<cc_item>.allocate(capacity: IOReportReader.cap)
     public let ok: Bool
     public init() { ok = cc_ior_open() == 0 }
 
@@ -63,7 +64,7 @@ public final class IOReportReader {
         var r = RawSample()
         guard ok else { return r }
         var dt = 0.25
-        let n = Int(cc_ior_sample(buf, 640, &dt))
+        let n = Int(cc_ior_sample(buf, Int32(Self.cap), &dt))
         r.dt = dt
         for i in 0..<max(0, n) {
             let it = buf[i]
@@ -165,6 +166,8 @@ public struct ChipFrame {
     public var gpu = GPUSample()
     public var cpuW = 0.0, aneW = 0.0, aveW = 0.0, ispW = 0.0, msrW = 0.0, pcieW = 0.0
     public var mem = MemSample()
+    /// AMC bandwidth counters exist (M1 family). Without them every bandwidth is unknown, not 0.
+    public var hasBW = false
     public var bw: [String: BW] = [:]
     public var fabric: [String: FabricSample] = [:]
     public init() {}
@@ -189,15 +192,18 @@ public func buildChipFrame(_ t: Topology, _ raw: RawSample, gpu: [String: Any]) 
     }
     let (gb, gm, gs) = residencySummary(raw.gpuStates, t.gpuFreqs)
     let perf = gpu
-    f.gpu = GPUSample(busy: gb, mhz: gm, w: e["GPU Energy"] ?? e["GPU0"] ?? 0, wSram: e["GPU SRAM0"] ?? 0,
+    f.gpu = GPUSample(busy: gb, mhz: gm, w: e["GPU Energy"] ?? (sum { $0.hasSuffix("GPU Energy") } > 0 ? sum { $0.hasSuffix("GPU Energy") } : e["GPU0"] ?? 0), wSram: e["GPU SRAM0"] ?? 0,
                       util: (perf["Device Utilization %"] as? NSNumber).map { $0.doubleValue / 100 },
                       renderer: (perf["Renderer Utilization %"] as? NSNumber)?.intValue, tiler: (perf["Tiler Utilization %"] as? NSNumber)?.intValue,
                       memUsed: (perf["In use system memory"] as? NSNumber)?.intValue, states: gs.filter { $0.1 > 0.0005 })
-    f.cpuW = e["CPU Energy"] ?? 0
-    f.aneW = e["ANE0"] ?? 0
+    // Totals: "CPU Energy" (Ultra: "DIE_N_CPU Energy"), "ANE"/"ANE0"/"ANE0_N", "DRAM0", "GPU Energy".
+    func sum(_ match: (String) -> Bool) -> Double { e.filter { match($0.key) }.values.reduce(0, +) }
+    f.cpuW = sum { $0.hasSuffix("CPU Energy") }
+    f.aneW = sum { $0.hasPrefix("ANE") }
     f.aveW = e["AVE0"] ?? 0; f.ispW = e["ISP0"] ?? 0; f.msrW = e["MSR0"] ?? 0
     f.pcieW = e.filter { $0.key.contains("PCIe") || $0.key.contains("apciec") }.values.reduce(0, +)
     let amc = raw.amc
+    f.hasBW = !amc.isEmpty
     for a in AGENTS {
         guard amc["\(a.id) RD"] != nil || amc["\(a.id) WR"] != nil else { continue }
         f.bw[a.id] = BW(rd: amc["\(a.id) RD"] ?? 0, wr: amc["\(a.id) WR"] ?? 0, dcsRd: amc["\(a.id) DCS RD"] ?? 0, dcsWr: amc["\(a.id) DCS WR"] ?? 0)
@@ -208,7 +214,30 @@ public func buildChipFrame(_ t: Topology, _ raw: RawSample, gpu: [String: Any]) 
     }
     let agentsTotal = f.bw.values.reduce(0) { $0 + $1.total }
     let dRd = amc["DCS RD"] ?? 0, dWr = amc["DCS WR"] ?? 0
-    f.mem = MemSample(dramW: e["DRAM0"] ?? 0, amccW: e["AMCC0"] ?? 0, dcsW: e["DCS0"] ?? 0, dramRd: dRd, dramWr: dWr, agentsTotal: agentsTotal,
+    f.mem = MemSample(dramW: sum { $0.hasPrefix("DRAM") }, amccW: sum { $0.hasPrefix("AMCC") }, dcsW: sum { $0.hasPrefix("DCS") }, dramRd: dRd, dramWr: dWr, agentsTotal: agentsTotal,
                       slcHit: agentsTotal > 50e6 ? max(0, min(1, 1 - (dRd + dWr) / agentsTotal)) : nil)
     return f
+}
+
+// ------------------------------------------------------------------ diagnostics
+public struct ChannelInfo { public let group, subgroup, name, unit: String; public let states: [String] }
+
+extension IOReportReader {
+    /// Every subscribed channel (names only), for `ChipCheck --dump`.
+    public func channels() -> [ChannelInfo] {
+        var dt = 0.0
+        let cap = 8192
+        let b = UnsafeMutablePointer<cc_item>.allocate(capacity: cap)
+        defer { b.deallocate() }
+        let n = Int(cc_ior_sample(b, Int32(cap), &dt))
+        return (0..<max(0, n)).map { i in
+            var it = b[i]
+            var states: [String] = []
+            withUnsafeBytes(of: &it.snames) { names in
+                for s in 0..<Int(it.nstates) { states.append(String(cString: names.baseAddress!.advanced(by: s * 16).assumingMemoryBound(to: CChar.self))) }
+            }
+            func s<T>(_ t: T) -> String { withUnsafeBytes(of: t) { String(cString: $0.bindMemory(to: CChar.self).baseAddress!) } }
+            return ChannelInfo(group: s(it.group), subgroup: s(it.subgroup), name: s(it.name), unit: s(it.unit), states: states)
+        }
+    }
 }

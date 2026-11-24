@@ -3,7 +3,7 @@
 #include <stdint.h>
 
 // ---------------------------------------------------------------- IOReport
-#define CC_MAX_STATES 24
+#define CC_MAX_STATES 32
 typedef struct {
     char group[48];
     char subgroup[72];
